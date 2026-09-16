@@ -1,236 +1,234 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Newtonsoft.Json;
+
 [Serializable]
 public class NeuralNetwork
 {
-	public static double Sigmoid(double x)
-	{
-		return 1 / (1 + Math.Exp(-x));
-	}
+    private int[] sizes;
+    private List<double[,]> weights;
+    private List<double[]> biases;
+    private List<double[,]> activations;
+    private List<double[,]> preActivations;
+    private double learningRate;
+    private double l2Lambda;
+    private Random rng;
 
-	public static double SigmoidDerivative(double x)
-	{
-		return x * (1 - x);
-	}
+    [JsonConstructor]
+    private NeuralNetwork() { }
 
-	public static double[,] DotProduct(double[,] A, double[,] B)
-	{
-		int rowsA = A.GetLength(0);
-		int colsA = A.GetLength(1);
-		int colsB = B.GetLength(1);
-		double[,] result = new double[rowsA, colsB];
+    public NeuralNetwork(int[] layerSizes, double learningRate = 0.1, double l2Lambda = 0.0001)
+    {
+        sizes = layerSizes;
+        this.learningRate = learningRate;
+        this.l2Lambda = l2Lambda;
+        rng = new Random();
+        weights = new List<double[,]>();
+        biases = new List<double[]>();
 
-		for (int i = 0; i < rowsA; i++)
-		{
-			for (int j = 0; j < colsB; j++)
-			{
-				for (int k = 0; k < colsA; k++)
-				{
-					result[i, j] += A[i, k] * B[k, j];
-				}
-			}
-		}
-		return result;
-	}
+        for (int i = 0; i < sizes.Length - 1; i++)
+        {
+            double scale = Math.Sqrt(2.0 / sizes[i]);
+            double[,] w = new double[sizes[i], sizes[i + 1]];
+            for (int r = 0; r < sizes[i]; r++)
+                for (int c = 0; c < sizes[i + 1]; c++)
+                    w[r, c] = GaussianRandom() * scale;
 
-	public static double[,] Transpose(double[,] matrix)
-	{
-		int rows = matrix.GetLength(0);
-		int cols = matrix.GetLength(1);
-		double[,] transposed = new double[cols, rows];
+            double[] b = new double[sizes[i + 1]];
+            weights.Add(w);
+            biases.Add(b);
+        }
+    }
 
-		for (int i = 0; i < rows; i++)
-		{
-			for (int j = 0; j < cols; j++)
-			{
-				transposed[j, i] = matrix[i, j];
-			}
-		}
-		return transposed;
-	}
+    private double GaussianRandom()
+    {
+        double u1 = 1.0 - rng.NextDouble();
+        double u2 = 1.0 - rng.NextDouble();
+        return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
+    }
 
-	public static double[,] AddMatrices(double[,] A, double[,] B)
-	{
-		int rows = A.GetLength(0);
-		int cols = A.GetLength(1);
-		double[,] result = new double[rows, cols];
+    private static double Sigmoid(double x) => 1.0 / (1.0 + Math.Exp(-Clamp(x)));
+    private static double SigmoidDerivative(double sig) => sig * (1.0 - sig);
+    private static double Clamp(double x, double min = -500, double max = 500) =>
+        x < min ? min : x > max ? max : x;
 
-		for (int i = 0; i < rows; i++)
-		{
-			for (int j = 0; j < cols; j++)
-			{
-				result[i, j] = A[i, j] + B[i, j];
-			}
-		}
-		return result;
-	}
+    private static double[,] Softmax(double[,] z)
+    {
+        int rows = z.GetLength(0), cols = z.GetLength(1);
+        double[,] result = new double[rows, cols];
+        for (int i = 0; i < rows; i++)
+        {
+            double max = double.MinValue;
+            for (int j = 0; j < cols; j++)
+                if (z[i, j] > max) max = z[i, j];
 
-	public static double[,] ScalarMultiply(double[,] matrix, double scalar)
-	{
-		int rows = matrix.GetLength(0);
-		int cols = matrix.GetLength(1);
-		double[,] result = new double[rows, cols];
+            double sum = 0;
+            for (int j = 0; j < cols; j++)
+            {
+                result[i, j] = Math.Exp(z[i, j] - max);
+                sum += result[i, j];
+            }
+            for (int j = 0; j < cols; j++)
+                result[i, j] /= sum;
+        }
+        return result;
+    }
 
-		for (int i = 0; i < rows; i++)
-		{
-			for (int j = 0; j < cols; j++)
-			{
-				result[i, j] = scalar * matrix[i, j];
-			}
-		}
-		return result;
-	}
+    public double[,] Forward(double[,] input)
+    {
+        activations = new List<double[,]>();
+        preActivations = new List<double[,]>();
 
-	public static double[,] ElementwiseMultiply(double[,] A, double[,] B)
-	{
-		int rows = A.GetLength(0);
-		int cols = A.GetLength(1);
-		double[,] result = new double[rows, cols];
+        activations.Add(input);
 
-		for (int i = 0; i < rows; i++)
-		{
-			for (int j = 0; j < cols; j++)
-			{
-				result[i, j] = A[i, j] * B[i, j];
-			}
-		}
-		return result;
-	}
+        for (int l = 0; l < weights.Count; l++)
+        {
+            int batchSize = input.GetLength(0);
+            int rows = sizes[l], cols = sizes[l + 1];
+            double[,] z = new double[batchSize, cols];
 
-	[JsonProperty]
-	private int numLayers { get; set; }
-	[JsonProperty]
-	private int[] layerSizes { get; set; }
-	[JsonProperty]
-	private List<double[,]> weights { get; set; }
-	[JsonProperty]
-	private List<double[,]> activations { get; set; }
-	[JsonProperty]
-	private List<double[,]> zValues { get; set; }
-	[JsonProperty]
-	private List<double[,]> errors { get; set; }
-	[JsonProperty]
-	private List<double[,]> deltas { get; set; }
+            for (int s = 0; s < batchSize; s++)
+                for (int c = 0; c < cols; c++)
+                {
+                    double sum = biases[l][c];
+                    for (int r = 0; r < rows; r++)
+                        sum += activations[l][s, r] * weights[l][r, c];
+                    z[s, c] = sum;
+                }
 
-	public NeuralNetwork(params int[] layerSizes)
-	{
-		this.numLayers = layerSizes.Length;
-		this.layerSizes = layerSizes;
-		this.weights = new List<double[,]>();
+            preActivations.Add(z);
 
-		Random rand = new Random();
-		for (int i = 0; i < numLayers - 1; i++)
-		{
-			double[,] layerWeights = new double[layerSizes[i], layerSizes[i + 1]];
-			for (int j = 0; j < layerSizes[i]; j++)
-			{
-				for (int k = 0; k < layerSizes[i + 1]; k++)
-				{
-					layerWeights[j, k] = rand.NextDouble() * 2 - 1;
-				}
-			}
-			this.weights.Add(layerWeights);
-		}
-	}
+            if (l == weights.Count - 1)
+                activations.Add(Softmax(z));
+            else
+            {
+                double[,] a = new double[batchSize, cols];
+                for (int s = 0; s < batchSize; s++)
+                    for (int c = 0; c < cols; c++)
+                        a[s, c] = Sigmoid(z[s, c]);
+                activations.Add(a);
+            }
+        }
 
-	public double[,] Forward(double[,] X)
-	{
-		activations = new List<double[,]>();
-		zValues = new List<double[,]>();
-		activations.Add(X);
+        return activations[activations.Count - 1];
+    }
 
-		for (int i = 0; i < numLayers - 1; i++)
-		{
-			double[,] z = DotProduct(activations[i], weights[i]);
-			zValues.Add(z);
+    public void Backward(double[,] targets)
+    {
+        int L = weights.Count;
+        List<double[,]> deltas = new List<double[,]>(L);
+        for (int i = 0; i < L; i++)
+            deltas.Add(null);
 
-			double[,] activation = new double[z.GetLength(0), z.GetLength(1)];
-			for (int j = 0; j < z.GetLength(0); j++)
-			{
-				for (int k = 0; k < z.GetLength(1); k++)
-				{
-					activation[j, k] = Sigmoid(z[j, k]);
-				}
-			}
-			activations.Add(activation);
-		}
+        int batchSize = targets.GetLength(0);
 
-		return activations[activations.Count - 1];
-	}
+        // output layer
+        int last = L - 1;
+        double[,] outputA = activations[last + 1];
+        double[,] dOut = new double[batchSize, sizes[L]];
 
-	public void Backward(double[,] correctOutputs, double[,] lastOutput)
-	{
-		errors = new List<double[,]>();
-		deltas = new List<double[,]>();
+        for (int s = 0; s < batchSize; s++)
+            for (int c = 0; c < sizes[L]; c++)
+                dOut[s, c] = outputA[s, c] - targets[s, c];
 
-		double[,] outputError = new double[correctOutputs.GetLength(0), correctOutputs.GetLength(1)];
-		for (int sample = 0; sample < correctOutputs.GetLength(0); sample++)
-		{
-			for (int outputIndex = 0; outputIndex < correctOutputs.GetLength(1); outputIndex++)
-			{
-				outputError[sample, outputIndex] = correctOutputs[sample, outputIndex] - lastOutput[sample, outputIndex];
-			}
-		}
-		errors.Add(outputError);
+        deltas[last] = dOut;
 
-		int numberOfSamples = lastOutput.GetLength(0);
-		int numberOfOutputs = lastOutput.GetLength(1);
-		double[,] outputDelta = new double[numberOfSamples, numberOfOutputs];
-		for (int sampleIndex = 0; sampleIndex < numberOfSamples; sampleIndex++)
-		{
-			for (int outputIndex = 0; outputIndex < numberOfOutputs; outputIndex++)
-			{
-				outputDelta[sampleIndex, outputIndex] = outputError[sampleIndex, outputIndex] * SigmoidDerivative(lastOutput[sampleIndex, outputIndex]);
-			}
-		}
-		deltas.Add(outputDelta);
+        // hidden layers
+        for (int l = last - 1; l >= 0; l--)
+        {
+            int rows = sizes[l + 1], cols = sizes[l + 2];
+            double[,] d = new double[batchSize, rows];
 
-		for (int layerIndex = numLayers - 2; layerIndex > 0; layerIndex--)
-		{
-			double[,] zError = DotProduct(deltas[0], Transpose(weights[layerIndex]));
-			errors.Insert(0, zError);
+            for (int s = 0; s < batchSize; s++)
+                for (int r = 0; r < rows; r++)
+                {
+                    double sum = 0;
+                    for (int c = 0; c < cols; c++)
+                        sum += deltas[l + 1][s, c] * weights[l + 1][r, c];
+                    d[s, r] = sum * SigmoidDerivative(activations[l + 1][s, r]);
+                }
 
-			double[,] zDelta = new double[activations[layerIndex].GetLength(0), activations[layerIndex].GetLength(1)];
-			for (int j = 0; j < activations[layerIndex].GetLength(0); j++)
-			{
-				for (int k = 0; k < activations[layerIndex].GetLength(1); k++)
-				{
-					zDelta[j, k] = zError[j, k] * SigmoidDerivative(activations[layerIndex][j, k]);
-				}
-			}
-			deltas.Insert(0, zDelta);
-		}
+            deltas[l] = d;
+        }
 
-		for (int i = 0; i < numLayers - 1; i++)
-		{
-			double[,] deltaWeights = DotProduct(Transpose(activations[i]), deltas[i]);
-			weights[i] = AddMatrices(weights[i], deltaWeights);
-		}
-	}
+        // update weights and biases
+        for (int l = 0; l < L; l++)
+        {
+            int inSize = sizes[l], outSize = sizes[l + 1];
 
+            for (int r = 0; r < inSize; r++)
+                for (int c = 0; c < outSize; c++)
+                {
+                    double grad = 0;
+                    for (int s = 0; s < batchSize; s++)
+                        grad += activations[l][s, r] * deltas[l][s, c];
+                    grad /= batchSize;
+                    grad += l2Lambda * weights[l][r, c];
+                    weights[l][r, c] -= learningRate * grad;
+                }
 
-	public void Train(double[,] X, double[,] y, int epochs = 10000)
-	{
-		for (int epoch = 0; epoch < epochs; epoch++)
-		{
-			double[,] output = Forward(X);
-			Backward(y, output);
-		}
-	}
+            for (int c = 0; c < outSize; c++)
+            {
+                double grad = 0;
+                for (int s = 0; s < batchSize; s++)
+                    grad += deltas[l][s, c];
+                grad /= batchSize;
+                biases[l][c] -= learningRate * grad;
+            }
+        }
+    }
 
-	public void Save(string name)
-	{
-		JsonSerializerSettings settings = new JsonSerializerSettings
-		{
-			Formatting = Formatting.Indented,
-			NullValueHandling = NullValueHandling.Ignore,
-			DefaultValueHandling = DefaultValueHandling.Ignore
-		};
-		string json = JsonConvert.SerializeObject(this, settings);
-		System.IO.File.WriteAllText(name + ".nn", json);
-	}
+    public double Train(double[,] X, double[,] y, int epochs = 10000, bool verbose = false)
+    {
+        double loss = 0;
+        for (int e = 0; e < epochs; e++)
+        {
+            Forward(X);
+            Backward(y);
 
-	public NeuralNetwork Load(string name)
-	{
-		string json = System.IO.File.ReadAllText(name + ".nn");
-		return JsonConvert.DeserializeObject<NeuralNetwork>(json);
-	}
+            if (verbose && e % 1000 == 0)
+            {
+                loss = CrossEntropyLoss(y);
+                Console.WriteLine($"Epoch {e}: loss = {loss:F6}");
+            }
+        }
+        loss = CrossEntropyLoss(y);
+        if (verbose) Console.WriteLine($"Final: loss = {loss:F6}");
+        return loss;
+    }
+
+    public double[,] Predict(double[,] input)
+    {
+        return Forward(input);
+    }
+
+    private double CrossEntropyLoss(double[,] targets)
+    {
+        double[,] output = activations[activations.Count - 1];
+        int rows = targets.GetLength(0), cols = targets.GetLength(1);
+        double loss = 0;
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < cols; j++)
+                if (targets[i, j] == 1.0)
+                    loss -= Math.Log(output[i, j] + 1e-12);
+        return loss / rows;
+    }
+
+    public void Save(string name)
+    {
+        var settings = new JsonSerializerSettings
+        {
+            Formatting = Formatting.Indented,
+            NullValueHandling = NullValueHandling.Ignore
+        };
+        string json = JsonConvert.SerializeObject(this, settings);
+        File.WriteAllText(name + ".nn", json);
+    }
+
+    public static NeuralNetwork Load(string name)
+    {
+        string json = File.ReadAllText(name + ".nn");
+        return JsonConvert.DeserializeObject<NeuralNetwork>(json);
+    }
 }
